@@ -32,10 +32,11 @@ from cnn_ws.losses.cosine_loss import CosineLoss
 
 from cnn_ws.models.myphocnet import PHOCNet
 from cnn_ws.evaluation.retrieval import map_from_feature_matrix, map_from_query_test_feature_matrices
-from torch.utils.data.dataloader import DataLoaderIter
+#from torch.utils.data.dataloader import DataLoaderIter
 from torch.utils.data.sampler import WeightedRandomSampler
 
 from cnn_ws.utils.save_load import my_torch_save, my_torch_load
+import time
 
 def learning_rate_step_parser(lrs_string):
     return [(int(elem.split(':')[0]), float(elem.split(':')[1])) for elem in lrs_string.split(',')]
@@ -44,11 +45,11 @@ def train():
     logger = logging.getLogger('PHOCNet-Experiment::train')
     logger.info('--- Running PHOCNet Training ---')
     # argument parsing
-    parser = argparse.ArgumentParser()    
+    parser = argparse.ArgumentParser()
     # - train arguments
     parser.add_argument('--learning_rate_step', '-lrs', type=learning_rate_step_parser, default='60000:1e-4,100000:1e-5',
                         help='A dictionary-like string indicating the learning rate for up to the number of iterations. ' +
-                             'E.g. the default \'70000:1e-4,80000:1e-5\' means learning rate 1e-4 up to step 70000 and 1e-5 till 80000.')
+                             'E.g. the default \'210000:1e-4,240000:1e-5\' means learning rate 1e-4 up to step 210000 and 1e-5 till 240000.')
     parser.add_argument('--momentum', '-mom', action='store', type=float, default=0.9,
                         help='The momentum for SGD training (or beta1 for Adam). Default: 0.9')
     parser.add_argument('--momentum2', '-mom2', action='store', type=float, default=0.999,
@@ -59,8 +60,8 @@ def train():
                         help='Which solver type to use. Possible: SGD, Adam. Default: Adam')
     parser.add_argument('--display', action='store', type=int, default=500,
                         help='The number of iterations after which to display the loss values. Default: 100')
-    parser.add_argument('--test_interval', action='store', type=int, default=2000,
-                        help='The number of iterations after which to periodically evaluate the PHOCNet. Default: 500')
+    parser.add_argument('--test_interval', action='store', type=int, default=200,
+                        help='The number of iterations after which to periodically evaluate the PHOCNet. Default: 200')
     parser.add_argument('--iter_size', '-is', action='store', type=int, default=10,
                         help='The batch size after which the gradient is computed. Default: 10')
     parser.add_argument('--batch_size', '-bs', action='store', type=int, default=1,
@@ -109,7 +110,7 @@ def train():
     #TODO: add augmentation
     logger.info('Loading dataset %s...', args.dataset)
     if args.dataset == 'gw':
-        train_set = GWDataset(gw_root_dir='../../../phocnet-pytorch-master/data/gw',
+        train_set = GWDataset(gw_root_dir='./data/gw',
                               cv_split_method='almazan',
                               cv_split_idx=1,
                               image_extension='.tif',
@@ -120,7 +121,7 @@ def train():
 
 
     if args.dataset == 'iam':
-        train_set = IAMDataset(gw_root_dir='../../../phocnet-pytorch-master/data/IAM',
+        train_set = IAMDataset(gw_root_dir='./data/IAM',
                                image_extension='.png',
                                embedding=args.embedding_type,
                                phoc_unigram_levels=args.phoc_unigram_levels,
@@ -146,7 +147,7 @@ def train():
                                   batch_size=args.batch_size, shuffle=True,
                                   num_workers=8)
 
-    train_loader_iter = DataLoaderIter(loader=train_loader)
+    #train_loader_iter = DataLoaderIter(loader=train_loader)
     test_loader = DataLoader(test_set,
                              batch_size=1,
                              shuffle=False,
@@ -159,13 +160,22 @@ def train():
                   gpp_type='gpp',
                   pooling_levels=([1], [5]))
 
-    cnn.init_weights()
 
-    ## pre-trained!!!!
-    load_pretrained = True
-    if load_pretrained:
-        #cnn.load_state_dict(torch.load('PHOCNet.pt', map_location=lambda storage, loc: storage))
-        my_torch_load(cnn, 'PHOCNet.pt')
+
+
+    resume_fname='PHOCNet.{}.pt'.format(args.dataset)
+    try:
+        cnn.load_state_dict(torch.load(resume_fname, map_location=lambda storage, loc: storage))
+    except:
+        cnn.init_weights()
+    #if load_pretrained:
+        #cnn.load_state_dict(torch.load('PHOCNet.{}pt'.format(args.dataset), map_location=lambda storage, loc: storage))
+    #    try:
+    #        resume_fname = 'PHOCNet.%s.pt'%args.dataset
+    #        print("Resuming from %s."%resume_fname)
+    #        my_torch_load(cnn, resume_fname)
+    #    except:
+    #        print("No file found to resume, starting from scratch.")
 
     loss_selection = 'BCE' # or 'cosine'
     if loss_selection == 'BCE':
@@ -198,16 +208,26 @@ def train():
 
     optimizer.zero_grad()
     logger.info('Training:')
+    #for iter_idx, (word_img, embedding, class_id, is_query) in enumerate(tqdm.tqdm(dataset_loader))
+    train_loader_iter = iter(train_loader)
+    last_map=0.0
     for iter_idx in range(max_iters):
         if iter_idx % args.test_interval == 0: # and iter_idx > 0:
             logger.info('Evaluating net after %d iterations', iter_idx)
-            evaluate_cnn(cnn=cnn,
+            last_map=evaluate_cnn(cnn=cnn,
                          dataset_loader=test_loader,
-                         args=args)        
-        for _ in range(args.iter_size):
+                         args=args)
+        #for  word_img, embedding, _, _ in train_loader:
+        #train_loader_iter = iter(train_loader)
+        #for _ in range(args.iter_size):
+        batch_t=time.time()
+        print "{:7d}".format(iter_idx),
+        for sample_iter in range(args.iter_size):
             if train_loader_iter.batches_outstanding == 0:
-                train_loader_iter = DataLoaderIter(loader=train_loader)
+                del train_loader_iter
+                train_loader_iter = iter(train_loader)
                 logger.info('Resetting data loader')
+            #print "Before next:"
             word_img, embedding, _, _ = train_loader_iter.next()
             if args.gpu_id is not None:
                 if len(args.gpu_id) > 1:
@@ -216,19 +236,23 @@ def train():
                 else:
                     word_img = word_img.cuda(args.gpu_id[0])
                     embedding = embedding.cuda(args.gpu_id[0])
-
+            print ".",
             word_img = torch.autograd.Variable(word_img)
             embedding = torch.autograd.Variable(embedding)
             output = cnn(word_img)
             ''' BCEloss ??? '''
             loss_val = loss(output, embedding)*args.batch_size
             loss_val.backward()
+        print "{:10.5f}sec. {:10.3}".format((time.time()-batch_t)/args.iter_size,last_map)
         optimizer.step()
         optimizer.zero_grad()
-
+        iter_idx+=1
         # mean runing errors??
         if (iter_idx+1) % args.display == 0:
             logger.info('Iteration %*d: %f', len(str(max_iters)), iter_idx+1, loss_val.data[0])
+            print 'Saving to ',resume_fname,' .. ',
+            my_torch_save(cnn, resume_fname)
+            print ' done.'
 
         # change lr
         if (iter_idx + 1) == args.learning_rate_step[lr_cnt][0] and (iter_idx+1) != max_iters:
@@ -240,10 +264,8 @@ def train():
         #    torch.save(cnn.state_dict(), 'PHOCNet.pt')
             # .. to load your previously training model:
             #cnn.load_state_dict(torch.load('PHOCNet.pt'))
-
-    #torch.save(cnn.state_dict(), 'PHOCNet.pt')
-    my_torch_save(cnn, 'PHOCNet.pt')
-
+        if iter_idx % 10000 ==0:
+            torch.save(cnn.state_dict(), 'PHOCNet.{}.pt'.format(args.dataset))
 
 def evaluate_cnn(cnn, dataset_loader, args):
     logger = logging.getLogger('PHOCNet-Experiment::test')
@@ -298,10 +320,9 @@ def evaluate_cnn(cnn, dataset_loader, args):
 
     logger.info('mAP: %3.2f', np.mean(ave_precs_qbe[ave_precs_qbe > 0])*100)
 
-
-
     # clean up -> set CNN in train mode again
     cnn.train()
+    return np.mean(ave_precs_qbe[ave_precs_qbe > 0])*100
 
 if __name__ == '__main__':
     logging.basicConfig(format='[%(asctime)s, %(levelname)s, %(name)s] %(message)s',
