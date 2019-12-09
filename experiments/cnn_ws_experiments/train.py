@@ -37,6 +37,7 @@ from torch.utils.data.sampler import WeightedRandomSampler
 
 from cnn_ws.utils.save_load import my_torch_save, my_torch_load
 import time
+from tensorboardX import SummaryWriter
 
 def learning_rate_step_parser(lrs_string):
     return [(int(elem.split(':')[0]), float(elem.split(':')[1])) for elem in lrs_string.split(',')]
@@ -90,14 +91,14 @@ def train():
                         type=lambda str_tuple: tuple([int(elem) for elem in str_tuple.split(',')]),
                         default=None ,
                         help='Specifies the images to be resized to a fixed size when presented to the CNN. Argument must be two comma seperated numbers.')
-    parser.add_argument('--dataset', '-ds', required=True, choices=['gw','iam'], default= 'gw',
+    parser.add_argument('--dataset', '-ds', required=True, choices=['gw','iam','cb'], default= 'gw',
                         help='The dataset to be trained on')
     args = parser.parse_args()
 
     # sanity checks
     if not torch.cuda.is_available():
         logger.warning('Could not find CUDA environment, using CPU mode')
-        args.gpu_id = None
+    #args.gpu_id = None
 
     # print out the used arguments
     logger.info('###########################################')
@@ -119,6 +120,15 @@ def train():
                               fixed_image_size=args.fixed_image_size,
                               min_image_width_height=args.min_image_width_height)
 
+    if args.dataset == 'cb':
+        train_set = GWDataset(gw_root_dir='./data/cb',
+                              cv_split_method='almazan',
+                              cv_split_idx=1,
+                              image_extension='.png',
+                              embedding=args.embedding_type,
+                              phoc_unigram_levels=args.phoc_unigram_levels,
+                              fixed_image_size=args.fixed_image_size,
+                              min_image_width_height=args.min_image_width_height)
 
     if args.dataset == 'iam':
         train_set = IAMDataset(gw_root_dir='./data/IAM',
@@ -145,7 +155,7 @@ def train():
     else:
         train_loader = DataLoader(train_set,
                                   batch_size=args.batch_size, shuffle=True,
-                                  num_workers=8)
+                                  num_workers=1)
 
     #train_loader_iter = DataLoaderIter(loader=train_loader)
     test_loader = DataLoader(test_set,
@@ -211,6 +221,7 @@ def train():
     #for iter_idx, (word_img, embedding, class_id, is_query) in enumerate(tqdm.tqdm(dataset_loader))
     train_loader_iter = iter(train_loader)
     last_map=0.0
+    writer = SummaryWriter()
     for iter_idx in range(max_iters):
         if iter_idx % args.test_interval == 0: # and iter_idx > 0:
             logger.info('Evaluating net after %d iterations', iter_idx)
@@ -223,12 +234,17 @@ def train():
         batch_t=time.time()
         print "{:7d}".format(iter_idx),
         for sample_iter in range(args.iter_size):
-            if train_loader_iter.batches_outstanding == 0:
-                del train_loader_iter
+            #if train_loader_iter.batches_outstanding == 0:
+            #    del train_loader_iter
+            #    train_loader_iter = iter(train_loader)
+            #    logger.info('Resetting data loader')
+            #print "Before next:"
+            try:
+                word_img, embedding, _, _ = train_loader_iter.next()
+            except:
                 train_loader_iter = iter(train_loader)
                 logger.info('Resetting data loader')
-            #print "Before next:"
-            word_img, embedding, _, _ = train_loader_iter.next()
+
             if args.gpu_id is not None:
                 if len(args.gpu_id) > 1:
                     word_img = word_img.cuda()
@@ -242,6 +258,7 @@ def train():
             output = cnn(word_img)
             ''' BCEloss ??? '''
             loss_val = loss(output, embedding)*args.batch_size
+            writer.add_scalar('loss',loss_val.sum(), iter_idx)
             loss_val.backward()
         print "{:10.5f}sec. {:10.3}".format((time.time()-batch_t)/args.iter_size,last_map)
         optimizer.step()
@@ -249,7 +266,7 @@ def train():
         iter_idx+=1
         # mean runing errors??
         if (iter_idx+1) % args.display == 0:
-            logger.info('Iteration %*d: %f', len(str(max_iters)), iter_idx+1, loss_val.data[0])
+            logger.info('Iteration %*d: %f', len(str(max_iters)), iter_idx+1, loss_val.item())
             print 'Saving to ',resume_fname,' .. ',
             my_torch_save(cnn, resume_fname)
             print ' done.'
