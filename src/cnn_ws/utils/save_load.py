@@ -9,15 +9,15 @@ from torch.nn.parameter import Parameter
 def my_torch_save(model, filename):
 
     # cpu save
-    if next(model.parameters()).is_cuda:
-        model = model.cpu()
+    #if next(model.parameters()).is_cuda:
+    #    model = model.cpu()
 
-    model_parameters = {name : param.data for name, param in model.named_parameters()}
+    model_parameters = {name : param.data.cpu() for name, param in model.named_parameters()}
     torch.save(model_parameters, filename)
 
 
 def my_torch_load(model, filename, use_list=None):
-
+    #use_cuda=next(model.parameters()).is_cuda
     model_parameters = torch.load(filename)
     own_state = model.state_dict()
 
